@@ -346,6 +346,12 @@ Function .onInit
       MessageBox MB_OK|MB_ICONSTOP 'This is the 64-bit ${APP_NAME} installer.$\nPlease download the 32-bit version from ${WEBSITE}.$\n$\nClick Ok to quit Setup.'
       Quit
     ${Endif}
+  !else
+    ${If} ${RunningX64}
+      MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 'There is a specific 64-bit ${APP_NAME} version.$\nFor details click ${WEBSITE}.$\nProceed with 32-bit installation anyway?' IDYES noprob
+      Quit
+      noprob:
+    ${Endif}
   !endif
 
   ; Win7 SP1 is minimum requirement
