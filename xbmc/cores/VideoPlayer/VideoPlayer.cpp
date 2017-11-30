@@ -697,6 +697,8 @@ CVideoPlayer::CVideoPlayer(IPlayerCallback& callback)
   m_displayLost = false;
   m_error = false;
   g_Windowing.Register(this);
+  m_needSeek = false;
+  m_delayedSeekTime = 0;
 }
 
 CVideoPlayer::~CVideoPlayer()
@@ -1444,6 +1446,32 @@ void CVideoPlayer::Process()
         OpenDefaultStreams();
 
       UpdatePlayState(0);
+    }
+
+    if (m_needSeek && m_seekDelay.GetElapsedMilliseconds() > 500)
+    {
+      bool    bPlus = (m_delayedSeekTime >= 0);
+      int64_t time = GetTime();
+      int64_t seek = time + m_delayedSeekTime;
+      int64_t iTotalTime = m_processInfo->GetMaxTime();
+
+      CLog::Log(LOGDEBUG, "DELAYEDSEEK: Executing seek of %ld from %ld to %ld", m_delayedSeekTime, time, seek);
+
+      if (g_application.CurrentFileItem().IsStack()
+        && (seek > iTotalTime || seek < 0))
+      {
+        g_application.SeekTime((seek - time) * 0.001 + g_application.GetTime());
+        // warning, don't access any videoplayer variables here as
+        // the videoplayer object may have been destroyed
+      }
+      else
+      {
+        m_messenger.Put(new CDVDMsgPlayerSeek((int)seek, !bPlus, true, false, true));
+        SynchronizeDemuxer(100);
+        if (seek < 0) seek = 0;
+        m_callback.OnPlayBackSeek((int)seek, (int)(seek - time));
+      }
+      continue;
     }
 
     // handle eventual seeks due to playspeed
@@ -2534,6 +2562,7 @@ void CVideoPlayer::HandleMessages()
       {
         m_processInfo->SetStateSeeking(false);
         pMsg->Release();
+        m_needSeek = false;
         continue;
       }
 
@@ -2618,6 +2647,7 @@ void CVideoPlayer::HandleMessages()
         m_dvd.state = DVDSTATE_SEEK;
 
       m_processInfo->SetStateSeeking(false);
+      m_needSeek = false;
     }
     else if (pMsg->IsType(CDVDMsg::PLAYER_SEEK_CHAPTER) &&
              m_messenger.GetPacketCount(CDVDMsg::PLAYER_SEEK) == 0 &&
@@ -3071,6 +3101,18 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
     }
   }
 
+  if (!m_needSeek)
+  {
+    CLog::Log(LOGDEBUG, "DELAYEDSEEK: Started. bPlus=%d", bPlus);
+    m_delayedSeekTime = 0;
+    m_seekDelay.StartZero();
+  }
+  else
+  {
+    CLog::Log(LOGDEBUG, "DELAYEDSEEK: Continuing. bPlus=%d", bPlus);
+    m_seekDelay.Reset();
+  }
+
   int64_t seekTarget;
   if (g_advancedSettings.m_videoUseTimeSeeking && m_processInfo->GetMaxTime() > 2000*g_advancedSettings.m_videoTimeSeekForwardBig)
   {
@@ -3081,6 +3123,8 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
       seekTarget = bPlus ? g_advancedSettings.m_videoTimeSeekForward :
                            g_advancedSettings.m_videoTimeSeekBackward;
     seekTarget *= 1000;
+    m_delayedSeekTime += seekTarget;
+    CLog::Log(LOGDEBUG, "DELAYEDSEEK: ABS New offset %ld", m_delayedSeekTime);
     seekTarget += GetTime();
   }
   else
@@ -3091,9 +3135,12 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
     else
       percent = bPlus ? g_advancedSettings.m_videoPercentSeekForward : g_advancedSettings.m_videoPercentSeekBackward;
     seekTarget = (int64_t)(m_processInfo->GetMaxTime()*(GetPercentage()+percent)/100);
+    m_delayedSeekTime += (int64_t)(m_processInfo->GetMaxTime()*(percent/100.f));
+    CLog::Log(LOGDEBUG, "DELAYEDSEEK: PCT New offset %ld", m_delayedSeekTime);
   }
 
   bool restore = true;
+  // check HasCut
 
   int64_t time = GetTime();
   if(g_application.CurrentFileItem().IsStack() &&
@@ -3231,7 +3278,7 @@ float CVideoPlayer::GetPercentage()
   if (!iTotalTime)
     return 0.0f;
 
-  return GetTime() * 100 / (float)iTotalTime;
+  return (GetTime() + (m_needSeek ? m_delayedSeekTime : 0)) * 100 / (float)iTotalTime;
 }
 
 float CVideoPlayer::GetCachePercentage()

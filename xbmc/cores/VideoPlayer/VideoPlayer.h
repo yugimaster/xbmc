@@ -41,6 +41,7 @@
 #include "threads/SystemClock.h"
 #include "threads/Thread.h"
 #include "utils/StreamDetails.h"
+#include "utils/Stopwatch.h"
 #include "guilib/DispResource.h"
 
 #ifdef TARGET_RASPBERRY_PI
@@ -589,4 +590,8 @@ protected:
   // omxplayer variables
   struct SOmxPlayerState m_OmxPlayerState;
   bool m_omxplayer_mode;            // using omxplayer acceleration
+
+  CStopWatch  m_seekDelay;
+  bool        m_needSeek;
+  int64_t     m_delayedSeekTime;
 };
