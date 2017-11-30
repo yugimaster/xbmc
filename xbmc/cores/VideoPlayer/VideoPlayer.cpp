@@ -1455,8 +1455,6 @@ void CVideoPlayer::Process()
       int64_t seek = time + m_delayedSeekTime;
       int64_t iTotalTime = m_processInfo->GetMaxTime();
 
-      CLog::Log(LOGDEBUG, "DELAYEDSEEK: Executing seek of %ld from %ld to %ld", m_delayedSeekTime, time, seek);
-
       if (g_application.CurrentFileItem().IsStack()
         && (seek > iTotalTime || seek < 0))
       {
@@ -3103,29 +3101,30 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
 
   if (!m_needSeek)
   {
-    CLog::Log(LOGDEBUG, "DELAYEDSEEK: Started. bPlus=%d", bPlus);
     m_delayedSeekTime = 0;
     m_seekDelay.StartZero();
   }
   else
-  {
-    CLog::Log(LOGDEBUG, "DELAYEDSEEK: Continuing. bPlus=%d", bPlus);
     m_seekDelay.Reset();
-  }
 
   int64_t seekTarget;
   if (g_advancedSettings.m_videoUseTimeSeeking && m_processInfo->GetMaxTime() > 2000*g_advancedSettings.m_videoTimeSeekForwardBig)
   {
+    int64_t seek_increment;
     if (bLargeStep)
-      seekTarget = bPlus ? g_advancedSettings.m_videoTimeSeekForwardBig :
+      seek_increment = bPlus ? g_advancedSettings.m_videoTimeSeekForwardBig :
                            g_advancedSettings.m_videoTimeSeekBackwardBig;
     else
-      seekTarget = bPlus ? g_advancedSettings.m_videoTimeSeekForward :
-                           g_advancedSettings.m_videoTimeSeekBackward;
-    seekTarget *= 1000;
-    m_delayedSeekTime += seekTarget;
-    CLog::Log(LOGDEBUG, "DELAYEDSEEK: ABS New offset %ld", m_delayedSeekTime);
-    seekTarget += GetTime();
+      seek_increment = bPlus ? g_advancedSettings.m_videoTimeSeekForward :
+                          g_advancedSettings.m_videoTimeSeekBackward;
+    seek_increment *= 1000;
+    seekTarget = seek_increment + GetTime();
+    // clamp delayed seek to video start/end bounds
+    int64_t delayed_seek_test = seekTarget + m_delayedSeekTime;
+    if (delayed_seek_test > 0 && delayed_seek_test < m_processInfo->GetMaxTime())
+    {
+      m_delayedSeekTime += seek_increment;
+    }
   }
   else
   {
@@ -3135,8 +3134,13 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
     else
       percent = bPlus ? g_advancedSettings.m_videoPercentSeekForward : g_advancedSettings.m_videoPercentSeekBackward;
     seekTarget = (int64_t)(m_processInfo->GetMaxTime()*(GetPercentage()+percent)/100);
-    m_delayedSeekTime += (int64_t)(m_processInfo->GetMaxTime()*(percent/100.f));
-    CLog::Log(LOGDEBUG, "DELAYEDSEEK: PCT New offset %ld", m_delayedSeekTime);
+    // clamp delayed seek to video start/end bounds
+    int64_t seek_increment = (int64_t)(m_processInfo->GetMaxTime()*(percent/100.f));
+    int64_t delayed_seek_test = GetTime() + seek_increment + m_delayedSeekTime;
+    if (delayed_seek_test > 0 && delayed_seek_test < m_processInfo->GetMaxTime())
+    {
+      m_delayedSeekTime += seek_increment;
+    }
   }
 
   bool restore = true;
@@ -3162,6 +3166,7 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
 
   m_messenger.Put(new CDVDMsgPlayerSeek(mode));
   SynchronizeDemuxer();
+  seekTarget += m_delayedSeekTime;
   if (seekTarget < 0)
     seekTarget = 0;
   m_callback.OnPlayBackSeek(seekTarget, seekTarget - time);
