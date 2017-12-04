@@ -40,6 +40,7 @@
 #include "threads/SystemClock.h"
 #include "threads/Thread.h"
 #include "utils/StreamDetails.h"
+#include "utils/Stopwatch.h"
 #include "guilib/DispResource.h"
 
 #ifdef HAS_OMXPLAYER
@@ -596,4 +597,8 @@ protected:
   bool m_omxplayer_mode;            // using omxplayer acceleration
 
   XbmcThreads::EndTime m_player_status_timer;
+
+  CStopWatch m_seekDelay;
+  bool m_needSeek;
+  int64_t m_delayedSeekTime;
 };

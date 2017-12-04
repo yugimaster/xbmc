@@ -669,6 +669,8 @@ CVideoPlayer::CVideoPlayer(IPlayerCallback& callback)
 
   m_displayLost = false;
   g_Windowing.Register(this);
+  m_needSeek = false;
+  m_delayedSeekTime = 0;
 }
 
 CVideoPlayer::~CVideoPlayer()
@@ -1418,6 +1420,35 @@ void CVideoPlayer::Process()
 
       UpdateApplication(0);
       UpdatePlayState(0);
+    }
+
+    if (m_needSeek && m_seekDelay.GetElapsedMilliseconds() > 500)
+    {
+      bool bPlus = (m_delayedSeekTime >= 0);
+      int64_t time = GetTime();
+      int64_t seek = time + m_delayedSeekTime;
+
+      if(g_application.CurrentFileItem().IsStack()
+        && (seek > GetTotalTimeInMsec() || seek < 0))
+      {
+        g_application.SeekTime((seek - time) * 0.001 + g_application.GetTime());
+        // warning, don't access any dvdplayer variables here as
+        // the dvdplayer object may have been destroyed
+      }
+      else
+      {
+        CDVDMsgPlayerSeek::CMode mode;
+        mode.time = seek;
+        mode.backward = !bPlus;
+        mode.accurate = false;
+        mode.restore = true;
+        mode.sync = true;
+        m_messenger.Put(new CDVDMsgPlayerSeek(mode));
+        SynchronizeDemuxer();
+        if (seek < 0) seek = 0;
+        m_callback.OnPlayBackSeek((int)seek, (int)(seek - time));
+      }
+      continue;
     }
 
     // handle eventual seeks due to playspeed
@@ -2582,6 +2613,7 @@ void CVideoPlayer::HandleMessages()
       // dvd's will issue a HOP_CHANNEL that we need to skip
       if(m_pInputStream->IsStreamType(DVDSTREAM_TYPE_DVD))
         m_dvd.state = DVDSTATE_SEEK;
+      m_needSeek = false;
 
       m_processInfo->SetStateSeeking(false);
     }
@@ -3117,17 +3149,29 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
     }
   }
 
+  if (!m_needSeek)
+  {
+    m_delayedSeekTime = 0;
+    m_seekDelay.StartZero();
+  }
+  else
+    m_seekDelay.Reset();
+
   int64_t seekTarget;
   if (g_advancedSettings.m_videoUseTimeSeeking && GetTotalTime() > 2000*g_advancedSettings.m_videoTimeSeekForwardBig)
   {
+    int64_t seek_increment;
     if (bLargeStep)
-      seekTarget = bPlus ? g_advancedSettings.m_videoTimeSeekForwardBig :
-                           g_advancedSettings.m_videoTimeSeekBackwardBig;
+      seek_increment = bPlus ? g_advancedSettings.m_videoTimeSeekForwardBig :
+                               g_advancedSettings.m_videoTimeSeekBackwardBig;
     else
-      seekTarget = bPlus ? g_advancedSettings.m_videoTimeSeekForward :
-                           g_advancedSettings.m_videoTimeSeekBackward;
-    seekTarget *= 1000;
-    seekTarget += GetTime();
+      seek_increment = bPlus ? g_advancedSettings.m_videoTimeSeekForward : g_advancedSettings.m_videoTimeSeekBackward;
+    seek_increment *= 1000;
+    seekTarget = seek_increment + GetTime();
+    // clamp delayed seek to video start/end bounds
+    int64_t delayed_seek_test = seekTarget + m_delayedSeekTime;
+    if (delayed_seek_test > 0 && delayed_seek_test < GetTotalTimeInMsec())
+      m_delayedSeekTime += seek_increment;
   }
   else
   {
@@ -3137,6 +3181,11 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
     else
       percent = bPlus ? g_advancedSettings.m_videoPercentSeekForward : g_advancedSettings.m_videoPercentSeekBackward;
     seekTarget = (int64_t)(GetTotalTimeInMsec()*(GetPercentage()+percent)/100);
+    // clamp delayed seek to video start/end bounds
+    int64_t seek_increment = (int64_t)(GetTotalTimeInMsec()*(percent/100.f));
+    int64_t delayed_seek_test = GetTime() + seek_increment + m_delayedSeekTime;
+    if (delayed_seek_test > 0 && delayed_seek_test < GetTotalTimeInMsec())
+      m_delayedSeekTime += seek_increment;
   }
 
   bool restore = true;
@@ -3161,6 +3210,7 @@ void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
 
   m_messenger.Put(new CDVDMsgPlayerSeek(mode));
   SynchronizeDemuxer();
+  seekTarget += m_delayedSeekTime;
   if (seekTarget < 0)
     seekTarget = 0;
   m_callback.OnPlayBackSeek((int)seekTarget, (int)(seekTarget - time));
@@ -3277,7 +3327,7 @@ float CVideoPlayer::GetPercentage()
   if (!iTotalTime)
     return 0.0f;
 
-  return GetTime() * 100 / (float)iTotalTime;
+  return (GetTime() + (m_needSeek ? m_delayedSeekTime : 0)) * 100 / (float)iTotalTime;
 }
 
 float CVideoPlayer::GetCachePercentage()
