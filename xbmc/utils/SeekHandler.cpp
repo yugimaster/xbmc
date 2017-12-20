@@ -182,6 +182,22 @@ void CSeekHandler::Seek(bool forward, float amount, float duration /* = 0 */, bo
     }
   }
 
+  int64_t time = llrint(g_application.GetTime());
+  int64_t remainTime = llrint(g_application.GetTotalTime()) - time;
+  int64_t seek_increment = llrint(abs(m_seekSize));
+  if (forward)
+  {
+    if (remainTime < 0)
+      m_seekSize = 0;
+    else if (seek_increment > remainTime)
+      m_seekSize = remainTime;
+  }
+  else
+  {
+    if (seek_increment > time)
+      m_seekSize = -time;
+  }
+
   m_timer.StartZero();
 }
 
